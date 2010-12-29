@@ -13,6 +13,7 @@ LOCAL_SRC_FILES:=               \
     TestPlayerStub.cpp          \
     MidiMetadataRetriever.cpp   \
     MidiFile.cpp                \
+    FLACPlayer.cpp              \
     StagefrightPlayer.cpp       \
     StagefrightRecorder.cpp
 
@@ -33,7 +34,8 @@ LOCAL_SHARED_LIBRARIES :=     		\
 	libstagefright_omx    			\
 	libstagefright_color_conversion         \
 	libstagefright_foundation               \
-	libsurfaceflinger_client
+	libsurfaceflinger_client                \
+        libFLAC
 
 LOCAL_STATIC_LIBRARIES := \
         libstagefright_rtsp
@@ -51,6 +53,7 @@ LOCAL_SHARED_LIBRARIES += libdl
 endif
 
 LOCAL_C_INCLUDES :=                                                 \
+	external/flac/include                                           \
 	$(JNI_H_INCLUDE)                                                \
 	$(call include-path-for, graphics corecg)                       \
 	$(TOP)/frameworks/base/include/media/stagefright/openmax \
