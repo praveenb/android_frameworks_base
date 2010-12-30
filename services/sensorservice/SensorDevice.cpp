@@ -99,8 +99,6 @@ ANDROID_SINGLETON_STATIC_INSTANCE(SensorDevice)
 
 SensorDevice::SensorDevice()
     :  mSensorDevice(0),
-       mOldSensorsEnabled(0),
-       mOldSensorsCompatMode(false),
        mSensorModule(0)
 {
     status_t err = hw_get_module(SENSORS_HARDWARE_MODULE_ID,
@@ -112,43 +110,17 @@ SensorDevice::SensorDevice()
     if (mSensorModule) {
         err = sensors_open(&mSensorModule->common, &mSensorDevice);
 
-#ifdef ENABLE_SENSORS_COMPAT
-        if (err) {
-            if (!sensors_control_open(&mSensorModule->common, &mSensorControlDevice)) {
-                if (sensors_data_open(&mSensorModule->common, &mSensorDataDevice)) {
-                    LOGE_IF(err, "couldn't open device for module %s (%s)",
-                            SENSORS_HARDWARE_MODULE_ID, strerror(-err));
-                } else {
-                    LOGD("Opened sensors in backwards compat mode");
-                    mOldSensorsCompatMode = true;
-                }
-            } else {
-                LOGE_IF(err, "couldn't open device for module %s (%s)",
-                        SENSORS_HARDWARE_MODULE_ID, strerror(-err));
-            }
-        } else {
-            mOldSensorsCompatMode = false;
-        }
-#else
         LOGE_IF(err, "couldn't open device for module %s (%s)",
                 SENSORS_HARDWARE_MODULE_ID, strerror(-err));
-#endif
 
-
-        if (mSensorDevice || mOldSensorsCompatMode) {
+        if (mSensorDevice) {
             sensor_t const* list;
             ssize_t count = mSensorModule->get_sensors_list(mSensorModule, &list);
             mActivationCount.setCapacity(count);
             Info model;
             for (size_t i=0 ; i<size_t(count) ; i++) {
                 mActivationCount.add(list[i].handle, model);
-                if (mOldSensorsCompatMode) {
-                    mSensorDataDevice->data_open(mSensorDataDevice,
-                            mSensorControlDevice->open_data_source(mSensorControlDevice));
-                    mSensorControlDevice->activate(mSensorControlDevice, list[i].handle, 0);
-                } else {
-                    mSensorDevice->activate(mSensorDevice, list[i].handle, 0);
-                }
+                mSensorDevice->activate(mSensorDevice, list[i].handle, 0);
             }
         }
     }
@@ -180,45 +152,17 @@ ssize_t SensorDevice::getSensorList(sensor_t const** list) {
 }
 
 status_t SensorDevice::initCheck() const {
-    return (mSensorDevice || mOldSensorsCompatMode) && mSensorModule ? NO_ERROR : NO_INIT;
+    return mSensorDevice && mSensorModule ? NO_ERROR : NO_INIT;
 }
 
 ssize_t SensorDevice::poll(sensors_event_t* buffer, size_t count) {
-    if (!mSensorDevice && !mOldSensorsCompatMode) return NO_INIT;
-    if (mOldSensorsCompatMode) {
-        size_t pollsDone = 0;
-        LOGV("%d buffers were requested",count);
-        while (!mOldSensorsEnabled) {
-            sleep(1);
-            LOGV("Waiting...");
-        }
-        while (pollsDone < (size_t)mOldSensorsEnabled && pollsDone < count) {
-            sensors_data_t oldBuffer;
-            long result =  mSensorDataDevice->poll(mSensorDataDevice, &oldBuffer);
-            if (!result || result > SENSOR_TYPE_ROTATION_VECTOR) {
-                LOGV("Useless result at round %d",pollsDone);
-                continue;
-            }
-            buffer[pollsDone].timestamp = oldBuffer.time;
-            buffer[pollsDone].sensor = oldBuffer.sensor;
-            buffer[pollsDone].type = oldBuffer.sensor;
-            buffer[pollsDone].acceleration = oldBuffer.acceleration;
-            buffer[pollsDone].magnetic = oldBuffer.magnetic;
-            buffer[pollsDone].orientation = oldBuffer.orientation;
-            buffer[pollsDone].temperature = oldBuffer.temperature;
-            buffer[pollsDone].distance = oldBuffer.distance;
-            buffer[pollsDone].light = oldBuffer.light;
-            pollsDone++;
-        }
-        return pollsDone;
-    } else {
-        return mSensorDevice->poll(mSensorDevice, buffer, count);
-    }
+    if (!mSensorDevice) return NO_INIT;
+    return mSensorDevice->poll(mSensorDevice, buffer, count);
 }
 
 status_t SensorDevice::activate(void* ident, int handle, int enabled)
 {
-    if (!mSensorDevice && !mOldSensorsCompatMode) return NO_INIT;
+    if (!mSensorDevice) return NO_INIT;
     status_t err(NO_ERROR);
     bool actuateHardware = false;
 
@@ -240,20 +184,7 @@ status_t SensorDevice::activate(void* ident, int handle, int enabled)
         info.rates.removeItem(ident);
     }
     if (actuateHardware) {
-        if (mOldSensorsCompatMode) {
-            if (enabled)
-                mOldSensorsEnabled++;
-            else
-                mOldSensorsEnabled--;
-            LOGV("Activation for %d (%d)",handle,enabled);
-            if (enabled) {
-                mSensorControlDevice->wake(mSensorControlDevice);
-            }
-            err = mSensorControlDevice->activate(mSensorControlDevice, handle, enabled);
-            err = 0;
-        } else {
-            err = mSensorDevice->activate(mSensorDevice, handle, enabled);
-        }
+        err = mSensorDevice->activate(mSensorDevice, handle, enabled);
         if (enabled) {
             LOGE_IF(err, "Error activating sensor %d (%s)", handle, strerror(-err));
             if (err == 0) {
@@ -277,11 +208,7 @@ status_t SensorDevice::activate(void* ident, int handle, int enabled)
                 }
             }
         }
-        if (mOldSensorsCompatMode) {
-            mSensorControlDevice->set_delay(mSensorControlDevice, (ns/(1000*1000)));
-        } else {
-            mSensorDevice->setDelay(mSensorDevice, handle, ns);
-        }
+        mSensorDevice->setDelay(mSensorDevice, handle, ns);
     }
 
     return err;
@@ -289,7 +216,7 @@ status_t SensorDevice::activate(void* ident, int handle, int enabled)
 
 status_t SensorDevice::setDelay(void* ident, int handle, int64_t ns)
 {
-    if (!mSensorDevice && !mOldSensorsCompatMode) return NO_INIT;
+    if (!mSensorDevice) return NO_INIT;
     Info& info( mActivationCount.editValueFor(handle) );
     { // scope for lock
         Mutex::Autolock _l(mLock);
@@ -304,11 +231,7 @@ status_t SensorDevice::setDelay(void* ident, int handle, int64_t ns)
             }
         }
     }
-	if (mOldSensorsCompatMode) {
-		return mSensorControlDevice->set_delay(mSensorControlDevice, (ns/(1000*1000)));
-	} else {
-		return mSensorDevice->setDelay(mSensorDevice, handle, ns);
-	}
+    return mSensorDevice->setDelay(mSensorDevice, handle, ns);
 }
 
 // ---------------------------------------------------------------------------
